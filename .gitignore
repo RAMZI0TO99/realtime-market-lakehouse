@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Spark & Delta Lake (Critical to ignore)
+data/
+checkpoints/
+spark-warehouse/
+metastore_db/
+derby.log
+*.crc
+
+# Next.js
+frontend/.next/
+frontend/node_modules/
+frontend/out/
+
+# Environment / OS
+.env
+.DS_Store
