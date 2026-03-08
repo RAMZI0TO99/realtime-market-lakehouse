@@ -4,40 +4,60 @@ import logging
 import websocket
 from kafka import KafkaProducer
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Use the localhost port defined in docker-compose
-KAFKA_BROKER = '127.0.0.1:29092'
+KAFKA_BROKER = 'localhost:29092'
 KAFKA_TOPIC = 'bronze_market_trades'
+
+SYMBOLS = ["btcusdt", "ethusdt", "solusdt"]
 
 def get_producer():
     while True:
         try:
-            return KafkaProducer(
+            producer = KafkaProducer(
                 bootstrap_servers=[KAFKA_BROKER],
                 value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-                acks='all' # Guarantee data delivery
+                acks='all'
             )
-        except Exception:
-            logging.info("Waiting for Kafka to be ready...")
+            return producer
+        except Exception as e:
+            logging.warning(f"Kafka not ready, retrying... ({e})")
             time.sleep(5)
 
 producer = get_producer()
 
 def on_message(ws, message):
-    data = json.loads(message)
-    # Filter for trade events only
-    if data.get('e') == 'trade':
-        producer.send(KAFKA_TOPIC, data)
-        print(f"Sent: {data['s']} at {data['p']}", end='\r')
+    try:
+        msg = json.loads(message)
+        # Handle multiplexed stream wrapper
+        trade_data = msg.get('data', msg) 
+        
+        if trade_data.get('e') == 'trade':
+            producer.send(KAFKA_TOPIC, trade_data)
+            symbol = trade_data['s']
+            price = float(trade_data['p'])
+            print(f"📡 Ingesting: {symbol} @ ${price:,.2f}          ", end='\r')
+    except Exception as e:
+        logging.error(f"Error processing message: {e}")
 
 def on_open(ws):
-    logging.info("Stream Started.")
+    logging.info(f"Connected to Binance. Streaming: {', '.join(SYMBOLS)}")
 
 if __name__ == "__main__":
-    ws = websocket.WebSocketApp(
-        "wss://stream.binance.com:9443/ws/btcusdt@trade",
-        on_open=on_open,
-        on_message=on_message
-    )
-    ws.run_forever()
+    streams = "/".join([f"{s}@trade" for s in SYMBOLS])
+    BINANCE_WS_URL = f"wss://stream.binance.com:9443/stream?streams={streams}"
+    
+    ws = websocket.WebSocketApp(BINANCE_WS_URL, on_open=on_open, on_message=on_message)
+    
+    try:
+        # Run the WebSocket
+        ws.run_forever()
+    except KeyboardInterrupt:
+        logging.info("Keyboard interrupt received. Stopping producer...")
+    finally:
+        # Force the producer to close with a fast 3-second timeout
+        # This prevents the atexit KafkaTimeoutError traceback
+        if producer:
+            logging.info("Flushing lingering messages and closing Kafka connection...")
+            producer.close(timeout=3)
+            logging.info("Producer shutdown complete.")

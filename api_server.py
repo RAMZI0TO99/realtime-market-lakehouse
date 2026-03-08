@@ -1,7 +1,8 @@
 import pandas as pd
 import logging
 import os
-from fastapi import FastAPI
+import requests
+from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from deltalake import DeltaTable
 from sklearn.ensemble import IsolationForest
@@ -9,59 +10,61 @@ from sklearn.ensemble import IsolationForest
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 app = FastAPI(title="Market AI Anomaly Detector")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Initialize model
 model = IsolationForest(contamination=0.05, random_state=42)
-MODEL_FITTED = False # Flag to prevent IndexError before training
+MODEL_FITTED = False
+
+# Configure your bot here
+TELEGRAM_TOKEN = "YOUR_BOT_TOKEN_HERE"
+TELEGRAM_CHAT_ID = "YOUR_CHAT_ID_HERE"
+
+def send_telegram_alert(symbol: str, price: float, status: str):
+    if TELEGRAM_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        return 
+    msg = f"🚨 *NEXUS AI ALERT*\n\nAsset: {symbol}\nStatus: {status}\nPrice: ${price:,.2f}"
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    try:
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+    except Exception as e:
+        logging.error(f"Failed to send Telegram alert: {e}")
 
 def get_latest_gold_data():
     try:
-        # Safety check for Delta Lake folder
         if not os.path.exists("./data/gold_market_metrics/_delta_log"):
             return pd.DataFrame()
-            
         dt = DeltaTable("./data/gold_market_metrics")
-        df = dt.to_pandas()
-        return df.sort_values(by="window_start", ascending=False)
+        return dt.to_pandas().sort_values(by="window_start", ascending=False)
     except Exception as e:
-        logging.error(f"Delta Read Error: {e}")
         return pd.DataFrame()
 
-@app.get("/api/v1/market/status")
-def get_market_status():
+@app.get("/api/v1/market/status/{symbol}")
+def get_market_status(symbol: str, background_tasks: BackgroundTasks):
     global MODEL_FITTED
+    symbol = symbol.upper()
     df = get_latest_gold_data()
     
-    if df.empty or len(df) < 2:
-        return {"status": "waiting", "message": "Awaiting more data windows..."}
+    if df.empty:
+        return {"status": "waiting", "symbol": symbol}
 
-    latest_bar = df.iloc[0].to_dict()
+    df_symbol = df[df['symbol'] == symbol]
+    if df_symbol.empty or len(df_symbol) < 2:
+        return {"status": "waiting", "symbol": symbol}
+
+    latest_bar = df_symbol.iloc[0].to_dict()
     anomaly_flag = False
 
     try:
-        # Use 'close' and 'total_volume' as features
-        # We keep it as a DataFrame to avoid the "Feature Names" UserWarning
-        features = df[['close', 'total_volume']].fillna(0)
-        
-        # We need enough data to establishment a baseline (at least 10 rows)
-        if len(df) >= 10:
+        features = df_symbol[['close', 'total_volume']].fillna(0)
+        if len(df_symbol) >= 10:
             model.fit(features)
             MODEL_FITTED = True
-            
-            # Predict only on the most recent row
-            # We wrap it in a DataFrame to keep feature names consistent
             current_row = features.iloc[[0]] 
             prediction = model.predict(current_row)
             anomaly_flag = bool(prediction[0] == -1)
             
+            if anomaly_flag:
+                background_tasks.add_task(send_telegram_alert, symbol, latest_bar["close"], "Unusual Volatility Detected")
     except Exception as e:
         logging.warning(f"AI Inference skipped: {e}")
 
@@ -69,10 +72,8 @@ def get_market_status():
         "timestamp": str(latest_bar["window_start"]),
         "symbol": latest_bar["symbol"],
         "metrics": {
-            "open": latest_bar["open"],
-            "high": latest_bar["high"],
-            "low": latest_bar["low"],
-            "close": latest_bar["close"],
+            "open": latest_bar["open"], "high": latest_bar["high"],
+            "low": latest_bar["low"], "close": latest_bar["close"],
             "volume": latest_bar["total_volume"]
         },
         "ai_analysis": {
@@ -80,6 +81,32 @@ def get_market_status():
             "status": "Warning: Unusual Activity!" if anomaly_flag else "Normal"
         }
     }
+
+@app.get("/api/v1/market/versions")
+def get_table_versions():
+    try:
+        dt = DeltaTable("./data/gold_market_metrics")
+        latest_version = dt.history()[0]["version"]
+        return {"latest_version": latest_version}
+    except Exception as e:
+        return {"latest_version": 0, "error": str(e)}
+
+@app.get("/api/v1/market/timetravel/{symbol}/{version}")
+def get_time_travel_data(symbol: str, version: int):
+    symbol = symbol.upper()
+    try:
+        dt = DeltaTable("./data/gold_market_metrics", version=version)
+        df_symbol = dt.to_pandas()[dt.to_pandas()['symbol'] == symbol].sort_values(by="window_start")
+        
+        if df_symbol.empty:
+            return {"status": "empty", "data": []}
+            
+        formatted_data = [{"time": pd.to_datetime(row["window_start"]).strftime("%I:%M %p"), "price": row["close"]} 
+                          for _, row in df_symbol.tail(20).iterrows()]
+            
+        return {"status": "success", "version": version, "data": formatted_data}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
