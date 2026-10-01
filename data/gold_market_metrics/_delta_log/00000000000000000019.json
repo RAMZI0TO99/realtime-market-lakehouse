@@ -1,2 +1,0 @@
-{"commitInfo":{"timestamp":1773000073010,"operation":"STREAMING UPDATE","operationParameters":{"outputMode":"Append","queryId":"2177269d-5bac-444e-870a-b93b497f3778","epochId":"18"},"readVersion":18,"isolationLevel":"Serializable","isBlindAppend":true,"operationMetrics":{"numRemovedFiles":"0","numOutputRows":"0","numOutputBytes":"0","numAddedFiles":"0"},"engineInfo":"Apache-Spark/3.5.0 Delta-Lake/3.1.0","txnId":"432ed5ff-4444-4244-ba25-0fc228e0f51c"}}
-{"txn":{"appId":"2177269d-5bac-444e-870a-b93b497f3778","version":18,"lastUpdated":1773000073007}}

@@ -80,8 +80,7 @@ python -m pip install requests
 
 `api_server.py` imports `requests`, but it is currently missing from
 `requirements.txt`; the separate install is required even with Telegram alerts
-disabled. The dependency versions and commands here follow the checked-in
-source; this README does not claim a newly validated end-to-end installation.
+disabled.
 
 ### 2. Start Kafka, then ingestion
 
@@ -155,6 +154,27 @@ for two completed bars before expecting a price chart; anomaly detection starts
 only after at least ten bars for the selected symbol.
 
 ## Inspect the data
+
+### Runtime state and a sample trade
+
+Delta tables in `data/` and streaming checkpoints in `checkpoints/` are local
+runtime outputs and are excluded from Git. The unified orchestrator creates
+the Silver and Gold tables on a fresh checkout; no downloaded dataset or
+previous checkpoint is required. Keep these directories between local runs
+to retain table history and stream progress.
+
+[examples/trades.jsonl](examples/trades.jsonl) contains **six synthetic events**
+for the three supported symbols. It illustrates the unwrapped trade payload
+sent to Kafka by the producer: `e` is the event type, `s` the symbol, `E` and
+`T` Unix timestamps in milliseconds, `p` and `q` decimal strings for price and
+quantity, and `m` a boolean buyer-maker flag. Spark uses `s`, `E`, `p`, `q`,
+and `m` for the Silver table.
+
+The sample is for reading the message shape, not market analysis. The live
+pipeline does not load or replay this file; follow the ingestion steps above
+to generate fresh data.
+
+### Query the API
 
 With the API running:
 
